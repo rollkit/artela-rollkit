@@ -1,7 +1,7 @@
 {
   "app_name": "artela-rollkitd",
   "app_version": "",
-  "genesis_time": "2024-08-19T02:50:07.087678Z",
+  "genesis_time": "2024-10-11T12:58:25.410546222Z",
   "chain_id": "artroll_11820-1",
   "initial_height": 1,
   "app_hash": null,
@@ -29,30 +29,9 @@
         },
         {
           "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "art1dq4gtx924wn6k034qfxel0klacty2gd7cktd2j",
+          "address": "art15cagjnsrq64j5h9p0gx6v8mnch82tu5q4e6v0g",
           "pub_key": null,
           "account_number": "1",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "art1a2flg0np0fcrjuygyzgzuf6xc3mxct8d9rukzd",
-          "pub_key": null,
-          "account_number": "2",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "art1z5jgh3an6hrl7ghdcdftpdztksjxl0gpjsg03v",
-          "pub_key": null,
-          "account_number": "3",
-          "sequence": "0"
-        },
-        {
-          "@type": "/cosmos.auth.v1beta1.BaseAccount",
-          "address": "art12uhkvq0axk452ctlvn0q55zgnymq6clml5064g",
-          "pub_key": null,
-          "account_number": "4",
           "sequence": "0"
         }
       ]
@@ -71,34 +50,7 @@
           "coins": []
         },
         {
-          "address": "art1z5jgh3an6hrl7ghdcdftpdztksjxl0gpjsg03v",
-          "coins": [
-            {
-              "denom": "aart",
-              "amount": "100000000000000000000000000"
-            }
-          ]
-        },
-        {
-          "address": "art12uhkvq0axk452ctlvn0q55zgnymq6clml5064g",
-          "coins": [
-            {
-              "denom": "aart",
-              "amount": "100000000000000000000000000"
-            }
-          ]
-        },
-        {
-          "address": "art1dq4gtx924wn6k034qfxel0klacty2gd7cktd2j",
-          "coins": [
-            {
-              "denom": "aart",
-              "amount": "100000000000000000000000000"
-            }
-          ]
-        },
-        {
-          "address": "art1a2flg0np0fcrjuygyzgzuf6xc3mxct8d9rukzd",
+          "address": "art15cagjnsrq64j5h9p0gx6v8mnch82tu5q4e6v0g",
           "coins": [
             {
               "denom": "aart",
@@ -177,7 +129,7 @@
           "shanghai_block": "0",
           "cancun_block": "0"
         },
-        "allow_unprotected_txs": true
+        "allow_unprotected_txs": false
       },
       "accounts": [
         {
@@ -230,10 +182,10 @@
                 },
                 "min_self_delegation": "1",
                 "delegator_address": "",
-                "validator_address": "artvaloper1dq4gtx924wn6k034qfxel0klacty2gd7k6rtfd",
+                "validator_address": "artvaloper15cagjnsrq64j5h9p0gx6v8mnch82tu5qm4j2vh",
                 "pubkey": {
                   "@type": "/cosmos.crypto.ed25519.PubKey",
-                  "key": "+SrfTnc7KUBAvp1s2LdutuDBc6kr6+nBCXtzPG7t4VM="
+                  "key": "DLcXY6acqcTnyhnvfycZ4sgSd6b1LhCLPTUux6nl4J4="
                 },
                 "value": {
                   "denom": "aart",
@@ -241,7 +193,7 @@
                 }
               }
             ],
-            "memo": "f4227c07ea565d792ab0b62ac8ca36f05dc54d57@192.168.50.101:26656",
+            "memo": "2a82678df894e9e45619b92f2fa212a1fd19401e@163.172.162.109:26656",
             "timeout_height": "0",
             "extension_options": [],
             "non_critical_extension_options": []
@@ -251,7 +203,7 @@
               {
                 "public_key": {
                   "@type": "/artela.crypto.ethsecp256k1.PubKey",
-                  "key": "Awf7YAGa6sZwRCo/iEUoCubZd1dPVYgf5VPGDmjPmNzk"
+                  "key": "A56ZbPnY8Mz3Rbx0l7G+8+S7N/+/xNncR+/hCosrVcuZ"
                 },
                 "mode_info": {
                   "single": {
@@ -275,7 +227,7 @@
             "tip": null
           },
           "signatures": [
-            "SjrsqJaKSLJj/Q6zaV4E5h86YYtfkLpb+fCmCfxyz6hgGKRJ7guAC4fBTi0YrbU+wJJZeNZF3akMP+I7k/Pp8AE="
+            "ROOIMIQmDcfACX13n3cu49HWA9NQKMFAaiDgyyI7BC9QDAdJhhlPWSokM+8x9zR2KSoWIsxEFmWmS6RTBWB/bgA="
           ]
         }
       ]
@@ -459,10 +411,10 @@
   "consensus": {
     "validators": [
       {
-        "address": "CF9A8D94CC8941E4963EA1D441C4BD801C3ADE80",
+        "address": "3263B152994E439332C7972060DC808637FCC04F",
         "pub_key": {
           "type": "tendermint/PubKeyEd25519",
-          "value": "+SrfTnc7KUBAvp1s2LdutuDBc6kr6+nBCXtzPG7t4VM="
+          "value": "DLcXY6acqcTnyhnvfycZ4sgSd6b1LhCLPTUux6nl4J4="
         },
         "power": "1000000000000000",
         "name": "Rollkit Sequencer"

@@ -1,6 +1,7 @@
 version: 1
 build:
   ldflags: [ "-checklinkname=0" ]
+  main: cmd/artrolld
 validation: sovereign
 accounts: 
 - name: alice
