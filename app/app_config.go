@@ -294,10 +294,8 @@ var (
 				Config: appconfig.WrapAny(&oraclemodulev1.Module{}),
 			},
 			{
-				Name: marketmaptypes.ModuleName,
-				Config: appconfig.WrapAny(&marketmapmodulev1.Module{
-					Authority: authtypes.NewModuleAddress(govtypes.ModuleName).String(),
-				}),
+				Name:   marketmaptypes.ModuleName,
+				Config: appconfig.WrapAny(&marketmapmodulev1.Module{}),
 			},
 			{
 				Name:   genutiltypes.ModuleName,
