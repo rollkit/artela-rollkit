@@ -304,7 +304,7 @@ func New(
 		)
 	)
 
-	if err := depinject.InjectDebug(depinject.StdoutLogger(), appConfig,
+	if err := depinject.Inject(appConfig,
 		&appBuilder,
 		&app.appCodec,
 		&app.legacyAmino,
