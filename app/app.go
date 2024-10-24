@@ -81,8 +81,7 @@ import (
 	"github.com/spf13/cast"
 
 	abci "github.com/cometbft/cometbft/abci/types"
-	tmtypes "github.com/cometbft/cometbft/proto/tendermint/types"
-	consensustypes "github.com/cosmos/cosmos-sdk/x/consensus/types"
+	oracleclient "github.com/skip-mev/connect/v2/service/clients/oracle"
 	marketmapkeeper "github.com/skip-mev/connect/v2/x/marketmap/keeper"
 	marketmaptypes "github.com/skip-mev/connect/v2/x/marketmap/types"
 	oraclekeeper "github.com/skip-mev/connect/v2/x/oracle/keeper"
@@ -172,6 +171,8 @@ type App struct {
 	EvmKeeper *evmmodulekeeper.Keeper
 	FeeKeeper feemodulekeeper.Keeper
 	// this line is used by starport scaffolding # stargate/app/keeperDeclaration
+
+	oracleClient oracleclient.OracleClient
 
 	OracleKeeper    *oraclekeeper.Keeper
 	MarketMapKeeper *marketmapkeeper.Keeper
@@ -341,12 +342,13 @@ func New(
 	app.MarketMapKeeper.SetHooks(app.OracleKeeper.Hooks())
 
 	// oracle initialization
-	client, metrics, err := app.initializeOracle(appOpts)
+	oracleClient, _, err := app.initializeOracle(appOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize oracle client and metrics: %w", err)
 	}
+	app.oracleClient = oracleClient
 
-	app.initializeABCIExtensions(client, metrics)
+	//app.initializeABCIExtensions(client, metrics)
 
 	// register extra types
 	RegisterInterfaces(app.interfaceRegistry)
@@ -372,24 +374,6 @@ func New(
 
 	// initialize the chain with markets in state.
 	app.SetInitChainer(sdk.InitChainer(func(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
-		consensusParams, err := app.ConsensusParamsKeeper.Params(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		consensusParams.Params.Abci = &tmtypes.ABCIParams{
-			VoteExtensionsEnableHeight: 5, // must be greater than 1
-		}
-		_, err = app.ConsensusParamsKeeper.UpdateParams(ctx, &consensustypes.MsgUpdateParams{
-			Authority: app.ConsensusParamsKeeper.GetAuthority(),
-			Block:     consensusParams.Params.Block,
-			Evidence:  consensusParams.Params.Evidence,
-			Validator: consensusParams.Params.Validator,
-			Abci:      consensusParams.Params.Abci,
-		})
-		if err != nil {
-			return nil, err
-		}
-
 		// initialize module state
 		app.OracleKeeper.InitGenesis(ctx, *oracletypes.DefaultGenesisState())
 		app.MarketMapKeeper.InitGenesis(ctx, *marketmaptypes.DefaultGenesisState())
@@ -403,9 +387,13 @@ func New(
 		return app.App.InitChainer(ctx, req)
 	}))
 
+	app.SetPreBlocker(app.PreBlocker)
+	app.SetBeginBlocker(app.BeginBlocker)
+	app.setPostHandler()
+	app.SetEndBlocker(app.EndBlocker)
+
 	maxGasWanted := cast.ToUint64(appOpts.Get(srvflags.EVMMaxTxGasWanted))
 	app.setAnteHandler(app.txConfig, maxGasWanted)
-	app.setPostHandler()
 
 	// init aspect pool
 	// set the runner cache capacity of aspect-runtime
@@ -416,6 +404,26 @@ func New(
 	}
 
 	return app, nil
+}
+
+// PreBlocker application updates every pre block
+func (app *App) PreBlocker(ctx sdk.Context, _ *abci.RequestFinalizeBlock) (*sdk.ResponsePreBlock, error) {
+	return app.ModuleManager.PreBlock(ctx)
+}
+
+// BeginBlocker application updates every begin block
+func (app *App) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
+	if err := app.fetchAndStoreOracleData(ctx); err != nil {
+		app.Logger().Error("failed to fetch and store oracle data", "err", err)
+
+	}
+
+	return app.ModuleManager.BeginBlock(ctx)
+}
+
+// EndBlocker application updates every end block
+func (app *App) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
+	return app.ModuleManager.EndBlock(ctx)
 }
 
 // LegacyAmino returns App's amino codec.
