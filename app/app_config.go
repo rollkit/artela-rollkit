@@ -62,7 +62,16 @@ import (
 	ibctransfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
 	ibcexported "github.com/cosmos/ibc-go/v8/modules/core/exported"
 	"google.golang.org/protobuf/types/known/durationpb"
+
 	// this line is used by starport scaffolding # stargate/app/moduleImport
+
+	marketmapmodulev1 "github.com/skip-mev/connect/v2/api/connect/marketmap/module/v2"
+	oraclemodulev1 "github.com/skip-mev/connect/v2/api/connect/oracle/module/v2"
+	marketmaptypes "github.com/skip-mev/connect/v2/x/marketmap/types"
+	oracletypes "github.com/skip-mev/connect/v2/x/oracle/types"
+
+	_ "github.com/skip-mev/connect/v2/x/marketmap" // import for side-effects
+	_ "github.com/skip-mev/connect/v2/x/oracle"    // import for side-effects
 )
 
 var (
@@ -100,6 +109,8 @@ var (
 		group.ModuleName,
 		consensustypes.ModuleName,
 		circuittypes.ModuleName,
+		oracletypes.ModuleName,
+		marketmaptypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/initGenesis
 	}
 
@@ -135,6 +146,8 @@ var (
 		ibctransfertypes.ModuleName,
 		icatypes.ModuleName,
 		ibcfeetypes.ModuleName,
+		oracletypes.ModuleName,
+		marketmaptypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/beginBlockers
 	}
 
@@ -168,6 +181,8 @@ var (
 		upgradetypes.ModuleName,
 		vestingtypes.ModuleName,
 		consensustypes.ModuleName,
+		oracletypes.ModuleName,
+		marketmaptypes.ModuleName,
 		// this line is used by starport scaffolding # stargate/app/endBlockers
 	}
 
@@ -190,6 +205,7 @@ var (
 		{Account: icatypes.ModuleName},
 		// this line is used by starport scaffolding # stargate/app/maccPerms
 		{Account: evmmoduletypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner}},
+		{Account: oracletypes.ModuleName, Permissions: []string{}},
 	}
 
 	// blocked account addresses
@@ -272,6 +288,14 @@ var (
 			{
 				Name:   "tx",
 				Config: appconfig.WrapAny(&txconfigv1.Config{}),
+			},
+			{
+				Name:   oracletypes.ModuleName,
+				Config: appconfig.WrapAny(&oraclemodulev1.Module{}),
+			},
+			{
+				Name:   marketmaptypes.ModuleName,
+				Config: appconfig.WrapAny(&marketmapmodulev1.Module{}),
 			},
 			{
 				Name:   genutiltypes.ModuleName,

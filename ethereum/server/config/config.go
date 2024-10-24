@@ -15,6 +15,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
 
+	oracleconfig "github.com/skip-mev/connect/v2/oracle/config"
+
 	aspecttypes "github.com/artela-network/aspect-core/types"
 )
 
@@ -83,6 +85,8 @@ type Config struct {
 	JSONRPC JSONRPCConfig `mapstructure:"json-rpc"`
 	TLS     TLSConfig     `mapstructure:"tls"`
 	Aspect  AspectConfig  `mapstructure:"aspect"`
+
+	Oracle oracleconfig.AppConfig `mapstructure:"oracle" json:"oracle"`
 }
 
 // EVMConfig defines the application configuration values for the EVM.
@@ -175,6 +179,14 @@ func AppConfig(denom string) (string, interface{}) {
 		srvCfg.MinGasPrices = "0" + denom
 	}
 
+	// oracle config
+	oracleCfg := oracleconfig.AppConfig{
+		Enabled:        true,
+		OracleAddress:  "localhost:8080",
+		ClientTimeout:  time.Second * 2,
+		MetricsEnabled: true,
+	}
+
 	// need to enable API for Aspect
 	srvCfg.API.Enable = true
 	customAppConfig := Config{
@@ -182,9 +194,11 @@ func AppConfig(denom string) (string, interface{}) {
 		EVM:     *DefaultEVMConfig(),
 		JSONRPC: *DefaultJSONRPCConfig(),
 		TLS:     *DefaultTLSConfig(),
+
+		Oracle: oracleCfg,
 	}
 
-	customAppTemplate := config.DefaultConfigTemplate + DefaultConfigTemplate
+	customAppTemplate := config.DefaultConfigTemplate + DefaultConfigTemplate + oracleconfig.DefaultConfigTemplate
 
 	return customAppTemplate, customAppConfig
 }

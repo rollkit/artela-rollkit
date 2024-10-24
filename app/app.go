@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/server/api"
 	"github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/x/auth"
 	_ "github.com/cosmos/cosmos-sdk/x/auth" // import for side-effects
@@ -78,6 +80,13 @@ import (
 	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
 	"github.com/spf13/cast"
 
+	abci "github.com/cometbft/cometbft/abci/types"
+	oracleclient "github.com/skip-mev/connect/v2/service/clients/oracle"
+	marketmapkeeper "github.com/skip-mev/connect/v2/x/marketmap/keeper"
+	marketmaptypes "github.com/skip-mev/connect/v2/x/marketmap/types"
+	oraclekeeper "github.com/skip-mev/connect/v2/x/oracle/keeper"
+	oracletypes "github.com/skip-mev/connect/v2/x/oracle/types"
+
 	"github.com/artela-network/artela-rollkit/app/ante"
 	"github.com/artela-network/artela-rollkit/app/ante/evm"
 	"github.com/artela-network/artela-rollkit/app/post"
@@ -87,6 +96,7 @@ import (
 	evmmodulekeeper "github.com/artela-network/artela-rollkit/x/evm/keeper"
 	"github.com/artela-network/artela-rollkit/x/evm/types"
 	feemodulekeeper "github.com/artela-network/artela-rollkit/x/fee/keeper"
+
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 
 	"github.com/artela-network/artela-rollkit/docs"
@@ -161,6 +171,11 @@ type App struct {
 	EvmKeeper *evmmodulekeeper.Keeper
 	FeeKeeper feemodulekeeper.Keeper
 	// this line is used by starport scaffolding # stargate/app/keeperDeclaration
+
+	oracleClient oracleclient.OracleClient
+
+	OracleKeeper    *oraclekeeper.Keeper
+	MarketMapKeeper *marketmapkeeper.Keeper
 
 	// simulation manager
 	sm *module.SimulationManager
@@ -315,12 +330,25 @@ func New(
 		&app.CircuitBreakerKeeper,
 		&app.FeeKeeper,
 		&app.EvmKeeper,
+		&app.MarketMapKeeper,
+		&app.OracleKeeper,
 		// this line is used by starport scaffolding # stargate/app/keeperDefinition
 	); err != nil {
 		panic(err)
 	}
 
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
+
+	app.MarketMapKeeper.SetHooks(app.OracleKeeper.Hooks())
+
+	// oracle initialization
+	oracleClient, _, err := app.initializeOracle(appOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize oracle client and metrics: %w", err)
+	}
+	app.oracleClient = oracleClient
+
+	//app.initializeABCIExtensions(client, metrics)
 
 	// register extra types
 	RegisterInterfaces(app.interfaceRegistry)
@@ -344,20 +372,28 @@ func New(
 	app.sm = module.NewSimulationManagerFromAppModules(app.ModuleManager.Modules, overrideModules)
 	app.sm.RegisterStoreDecoders()
 
-	// A custom InitChainer can be set if extra pre-init-genesis logic is required.
-	// By default, when using app wiring enabled module, this is not required.
-	// For instance, the upgrade module will set automatically the module version map in its init genesis thanks to app wiring.
-	// However, when registering a module manually (i.e. that does not support app wiring), the module version map
-	// must be set manually as follow. The upgrade module will de-duplicate the module version map.
-	//
-	// app.SetInitChainer(func(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
-	// 	app.UpgradeKeeper.SetModuleVersionMap(ctx, app.ModuleManager.GetVersionMap())
-	// 	return app.App.InitChainer(ctx, req)
-	// })
+	// initialize the chain with markets in state.
+	app.SetInitChainer(sdk.InitChainer(func(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
+		// initialize module state
+		app.OracleKeeper.InitGenesis(ctx, *oracletypes.DefaultGenesisState())
+		app.MarketMapKeeper.InitGenesis(ctx, *marketmaptypes.DefaultGenesisState())
+
+		// initialize markets
+		err = app.setupMarkets(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return app.App.InitChainer(ctx, req)
+	}))
+
+	app.SetPreBlocker(app.PreBlocker)
+	app.SetBeginBlocker(app.BeginBlocker)
+	app.setPostHandler()
+	app.SetEndBlocker(app.EndBlocker)
 
 	maxGasWanted := cast.ToUint64(appOpts.Get(srvflags.EVMMaxTxGasWanted))
 	app.setAnteHandler(app.txConfig, maxGasWanted)
-	app.setPostHandler()
 
 	// init aspect pool
 	// set the runner cache capacity of aspect-runtime
@@ -368,6 +404,26 @@ func New(
 	}
 
 	return app, nil
+}
+
+// PreBlocker application updates every pre block
+func (app *App) PreBlocker(ctx sdk.Context, _ *abci.RequestFinalizeBlock) (*sdk.ResponsePreBlock, error) {
+	return app.ModuleManager.PreBlock(ctx)
+}
+
+// BeginBlocker application updates every begin block
+func (app *App) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
+	if err := app.fetchAndStoreOracleData(ctx); err != nil {
+		app.Logger().Error("failed to fetch and store oracle data", "err", err)
+
+	}
+
+	return app.ModuleManager.BeginBlock(ctx)
+}
+
+// EndBlocker application updates every end block
+func (app *App) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
+	return app.ModuleManager.EndBlock(ctx)
 }
 
 // LegacyAmino returns App's amino codec.
