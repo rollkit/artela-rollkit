@@ -99,7 +99,7 @@ enable-hostname-label = false
 enable-service-label = false
 
 # PrometheusRetentionTime, when positive, enables a Prometheus metrics sink.
-prometheus-retention-time = 1000000000000
+prometheus-retention-time  = 1000000000000
 
 # GlobalLabels defines a global set of name/value label tuples applied to all
 # metrics emitted using the wrapper functions defined in telemetry package.
@@ -332,10 +332,36 @@ key-path = ""
 apply-pool-size = 0
 query-pool-size = 0
 
+
+###############################################################################
+###                                  Oracle                                 ###
+###############################################################################
 [oracle]
+# Enabled indicates whether the oracle is enabled.
 enabled = "true"
+
+# Oracle Address is the URL of the out of process oracle sidecar. This is used to
+# connect to the oracle sidecar when the application boots up. Note that the address
+# can be modified at any point, but will only take effect after the application is
+# restarted. This can be the address of an oracle container running on the same
+# machine or a remote machine.
 oracle_address = "localhost:8080"
-client_timeout = "250ms"
+
+# Client Timeout is the time that the client is willing to wait for responses from 
+# the oracle before timing out. The recommended timeout is 3 seconds (3000ms).
+client_timeout = "2s"
+
+# MetricsEnabled determines whether oracle metrics are enabled. Specifically
+# this enables instrumentation of the oracle client and the interaction between
+# the oracle and the app.
 metrics_enabled = "true"
-interval = "1500ms"
-price_ttl = "10s"
+
+# PriceTTL is the maximum age of the latest price response before it is considered stale. 
+# The recommended max age is 10 seconds (10s). If this is greater than 1 minute (1m), the app
+# will not start.
+price_ttl = "0s"
+
+# Interval is the time between each price update request. The recommended interval
+# is the block time of the chain. Otherwise, 1.5 seconds (1500ms) is a good default. If this
+# is greater than 1 minute (1m), the app will not start.
+interval = "0s"
