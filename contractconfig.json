@@ -1,0 +1,8 @@
+{
+    "contract_config": {
+      "ethereum_rpc": "http://localhost:8545",
+      "private_key": "0x303e522f31907e2277544c6b36a223280a6387f7530f44e4279aaca22f0aef77",
+      "initial_supply": "1000000000000000000000000",
+      "oracle_address": "0xbf7dc76354e8f7d7a6feaa64920fb91997244299"
+    }
+}

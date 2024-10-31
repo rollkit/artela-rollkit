@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "cosmossdk.io/api/cosmos/tx/config/v1" // import for side-effects
 	"cosmossdk.io/depinject"
@@ -80,6 +82,9 @@ import (
 	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
 	"github.com/spf13/cast"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+
 	abci "github.com/cometbft/cometbft/abci/types"
 	oracleclient "github.com/skip-mev/connect/v2/service/clients/oracle"
 	marketmapkeeper "github.com/skip-mev/connect/v2/x/marketmap/keeper"
@@ -90,7 +95,9 @@ import (
 	"github.com/artela-network/artela-rollkit/app/ante"
 	"github.com/artela-network/artela-rollkit/app/ante/evm"
 	"github.com/artela-network/artela-rollkit/app/post"
-	"github.com/artela-network/artela-rollkit/common"
+	artelacommon "github.com/artela-network/artela-rollkit/common"
+	prediction "github.com/artela-network/artela-rollkit/contracts/generated"
+
 	srvflags "github.com/artela-network/artela-rollkit/ethereum/server/flags"
 	artela "github.com/artela-network/artela-rollkit/ethereum/types"
 	evmmodulekeeper "github.com/artela-network/artela-rollkit/x/evm/keeper"
@@ -176,6 +183,14 @@ type App struct {
 
 	OracleKeeper    *oraclekeeper.Keeper
 	MarketMapKeeper *marketmapkeeper.Keeper
+
+	betTokenAddress         common.Address
+	predictionMarketAddress common.Address
+
+	predictionMarket *prediction.PredictionMarket
+
+	ethClient      *ethclient.Client
+	contractConfig ContractConfig
 
 	// simulation manager
 	sm *module.SimulationManager
@@ -378,11 +393,30 @@ func New(
 		app.OracleKeeper.InitGenesis(ctx, *oracletypes.DefaultGenesisState())
 		app.MarketMapKeeper.InitGenesis(ctx, *marketmaptypes.DefaultGenesisState())
 
-		// initialize markets
-		err = app.setupMarkets(ctx)
-		if err != nil {
+		var genesisState GenesisState
+		if err := json.Unmarshal(req.AppStateBytes, &genesisState); err != nil {
 			return nil, err
 		}
+
+		// Initialize the chain with the genesis state
+		if err := app.SetupPredictionMarket(ctx); err != nil {
+			return nil, err
+		}
+
+		var contractConfig ContractConfig
+		if err := json.Unmarshal(genesisState["contract_config"], &contractConfig); err != nil {
+			return nil, err
+		}
+		app.contractConfig = contractConfig
+
+		go func() {
+			time.Sleep(10 * time.Second)
+			// Deploy contracts
+			err := app.DeployContracts()
+			if err != nil {
+				app.Logger().Error("failed to deploy contracts", "err", err)
+			}
+		}()
 
 		return app.App.InitChainer(ctx, req)
 	}))
@@ -397,7 +431,7 @@ func New(
 
 	// init aspect pool
 	// set the runner cache capacity of aspect-runtime
-	aspecttypes.InitRuntimePool(context.Background(), common.WrapLogger(app.Logger()), cast.ToInt32(appOpts.Get(srvflags.ApplyPoolSize)), cast.ToInt32(appOpts.Get(srvflags.QueryPoolSize)))
+	aspecttypes.InitRuntimePool(context.Background(), artelacommon.WrapLogger(app.Logger()), cast.ToInt32(appOpts.Get(srvflags.ApplyPoolSize)), cast.ToInt32(appOpts.Get(srvflags.QueryPoolSize)))
 
 	if err := app.Load(loadLatest); err != nil {
 		return nil, err
@@ -408,16 +442,16 @@ func New(
 
 // PreBlocker application updates every pre block
 func (app *App) PreBlocker(ctx sdk.Context, _ *abci.RequestFinalizeBlock) (*sdk.ResponsePreBlock, error) {
-	return app.ModuleManager.PreBlock(ctx)
-}
-
-// BeginBlocker application updates every begin block
-func (app *App) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
 	if err := app.fetchAndStoreOracleData(ctx); err != nil {
 		app.Logger().Error("failed to fetch and store oracle data", "err", err)
 
 	}
 
+	return app.ModuleManager.PreBlock(ctx)
+}
+
+// BeginBlocker application updates every begin block
+func (app *App) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
 	return app.ModuleManager.BeginBlock(ctx)
 }
 
