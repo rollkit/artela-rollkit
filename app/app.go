@@ -2,9 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	_ "cosmossdk.io/api/cosmos/tx/config/v1" // import for side-effects
 	"cosmossdk.io/depinject"
@@ -31,6 +35,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/server/api"
 	"github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/x/auth"
 	_ "github.com/cosmos/cosmos-sdk/x/auth" // import for side-effects
@@ -78,15 +83,28 @@ import (
 	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
 	"github.com/spf13/cast"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
+
+	abci "github.com/cometbft/cometbft/abci/types"
+	oracleclient "github.com/skip-mev/connect/v2/service/clients/oracle"
+	marketmapkeeper "github.com/skip-mev/connect/v2/x/marketmap/keeper"
+	marketmaptypes "github.com/skip-mev/connect/v2/x/marketmap/types"
+	oraclekeeper "github.com/skip-mev/connect/v2/x/oracle/keeper"
+	oracletypes "github.com/skip-mev/connect/v2/x/oracle/types"
+
 	"github.com/artela-network/artela-rollkit/app/ante"
 	"github.com/artela-network/artela-rollkit/app/ante/evm"
 	"github.com/artela-network/artela-rollkit/app/post"
-	"github.com/artela-network/artela-rollkit/common"
+	artelacommon "github.com/artela-network/artela-rollkit/common"
+	prediction "github.com/artela-network/artela-rollkit/contracts/generated"
+
 	srvflags "github.com/artela-network/artela-rollkit/ethereum/server/flags"
 	artela "github.com/artela-network/artela-rollkit/ethereum/types"
 	evmmodulekeeper "github.com/artela-network/artela-rollkit/x/evm/keeper"
 	"github.com/artela-network/artela-rollkit/x/evm/types"
 	feemodulekeeper "github.com/artela-network/artela-rollkit/x/fee/keeper"
+
 	// this line is used by starport scaffolding # stargate/app/moduleImport
 
 	"github.com/artela-network/artela-rollkit/docs"
@@ -161,6 +179,20 @@ type App struct {
 	EvmKeeper *evmmodulekeeper.Keeper
 	FeeKeeper feemodulekeeper.Keeper
 	// this line is used by starport scaffolding # stargate/app/keeperDeclaration
+
+	oracleClient oracleclient.OracleClient
+
+	OracleKeeper    *oraclekeeper.Keeper
+	MarketMapKeeper *marketmapkeeper.Keeper
+
+	betTokenAddress         common.Address
+	predictionMarketAddress common.Address
+
+	predictionMarket *prediction.ElectionPredictionMarket
+
+	ethClient         *ethclient.Client
+	contractConfig    ContractConfig
+	deploymentService *ContractDeploymentService
 
 	// simulation manager
 	sm *module.SimulationManager
@@ -315,12 +347,25 @@ func New(
 		&app.CircuitBreakerKeeper,
 		&app.FeeKeeper,
 		&app.EvmKeeper,
+		&app.MarketMapKeeper,
+		&app.OracleKeeper,
 		// this line is used by starport scaffolding # stargate/app/keeperDefinition
 	); err != nil {
 		panic(err)
 	}
 
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
+
+	app.MarketMapKeeper.SetHooks(app.OracleKeeper.Hooks())
+
+	// oracle initialization
+	oracleClient, _, err := app.initializeOracle(appOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize oracle client and metrics: %w", err)
+	}
+	app.oracleClient = oracleClient
+
+	//app.initializeABCIExtensions(client, metrics)
 
 	// register extra types
 	RegisterInterfaces(app.interfaceRegistry)
@@ -344,30 +389,131 @@ func New(
 	app.sm = module.NewSimulationManagerFromAppModules(app.ModuleManager.Modules, overrideModules)
 	app.sm.RegisterStoreDecoders()
 
-	// A custom InitChainer can be set if extra pre-init-genesis logic is required.
-	// By default, when using app wiring enabled module, this is not required.
-	// For instance, the upgrade module will set automatically the module version map in its init genesis thanks to app wiring.
-	// However, when registering a module manually (i.e. that does not support app wiring), the module version map
-	// must be set manually as follow. The upgrade module will de-duplicate the module version map.
-	//
-	// app.SetInitChainer(func(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
-	// 	app.UpgradeKeeper.SetModuleVersionMap(ctx, app.ModuleManager.GetVersionMap())
-	// 	return app.App.InitChainer(ctx, req)
-	// })
+	// initialize the chain with markets in state.
+	app.SetInitChainer(sdk.InitChainer(func(ctx sdk.Context, req *abci.RequestInitChain) (*abci.ResponseInitChain, error) {
+		// initialize module state
+		app.OracleKeeper.InitGenesis(ctx, *oracletypes.DefaultGenesisState())
+		app.MarketMapKeeper.InitGenesis(ctx, *marketmaptypes.DefaultGenesisState())
+
+		var genesisState GenesisState
+		if err := json.Unmarshal(req.AppStateBytes, &genesisState); err != nil {
+			return nil, err
+		}
+
+		// Initialize the chain with the genesis state
+		if err := app.SetupPredictionMarket(ctx); err != nil {
+			return nil, err
+		}
+
+		var contractConfig ContractConfig
+		if err := json.Unmarshal(genesisState["contract_config"], &contractConfig); err != nil {
+			return nil, err
+		}
+		app.contractConfig = contractConfig
+
+		// Deploy contracts
+		//err := app.DeployContracts()
+		//if err != nil {
+		//	app.Logger().Error("failed to deploy contracts", "err", err)
+		//}
+
+		return app.App.InitChainer(ctx, req)
+	}))
+
+	app.SetPreBlocker(app.PreBlocker)
+	app.SetBeginBlocker(app.BeginBlocker)
+	app.setPostHandler()
+	app.SetEndBlocker(app.EndBlocker)
+
+	deploymentService := NewContractDeploymentService(app)
+	app.deploymentService = deploymentService
+
+	// Start the service along with other app services
+	if err := deploymentService.Start(); err != nil {
+		panic(err)
+	}
 
 	maxGasWanted := cast.ToUint64(appOpts.Get(srvflags.EVMMaxTxGasWanted))
 	app.setAnteHandler(app.txConfig, maxGasWanted)
-	app.setPostHandler()
 
 	// init aspect pool
 	// set the runner cache capacity of aspect-runtime
-	aspecttypes.InitRuntimePool(context.Background(), common.WrapLogger(app.Logger()), cast.ToInt32(appOpts.Get(srvflags.ApplyPoolSize)), cast.ToInt32(appOpts.Get(srvflags.QueryPoolSize)))
+	aspecttypes.InitRuntimePool(context.Background(), artelacommon.WrapLogger(app.Logger()), cast.ToInt32(appOpts.Get(srvflags.ApplyPoolSize)), cast.ToInt32(appOpts.Get(srvflags.QueryPoolSize)))
 
 	if err := app.Load(loadLatest); err != nil {
 		return nil, err
 	}
 
 	return app, nil
+}
+
+// PreBlocker application updates every pre block
+func (app *App) PreBlocker(ctx sdk.Context, _ *abci.RequestFinalizeBlock) (*sdk.ResponsePreBlock, error) {
+	if err := app.fetchAndStoreOracleData(ctx); err != nil {
+		app.Logger().Error("failed to fetch and store oracle data", "err", err)
+
+	}
+
+	return app.ModuleManager.PreBlock(ctx)
+}
+
+// BeginBlocker application updates every begin block
+func (app *App) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
+	return app.ModuleManager.BeginBlock(ctx)
+}
+
+// EndBlocker application updates every end block
+func (app *App) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
+	return app.ModuleManager.EndBlock(ctx)
+}
+
+// Option 2: Using a separate service
+type ContractDeploymentService struct {
+	app        *App
+	deployOnce sync.Once
+}
+
+func NewContractDeploymentService(app *App) *ContractDeploymentService {
+	return &ContractDeploymentService{
+		app: app,
+	}
+}
+
+func (s *ContractDeploymentService) Start() error {
+	go func() {
+		// Wait for chain to start and Geth to be ready
+		time.Sleep(10 * time.Second)
+
+		s.deployOnce.Do(func() {
+			for i := 0; i < 30; i++ { // retry for 30 seconds
+				if s.app.IsEthereumReady() {
+					if err := s.app.DeployContracts(); err != nil {
+						s.app.Logger().Error("failed to deploy contracts", "err", err)
+					}
+					return
+				}
+				time.Sleep(time.Second)
+			}
+			s.app.Logger().Error("timed out waiting for Ethereum to be ready")
+		})
+	}()
+
+	return nil
+}
+
+// Helper method to check if Ethereum is ready
+func (app *App) IsEthereumReady() bool {
+	client, err := ethclient.Dial("http://localhost:8545")
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err = client.BlockNumber(ctx)
+	return err == nil
 }
 
 // LegacyAmino returns App's amino codec.
