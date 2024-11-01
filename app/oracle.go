@@ -137,7 +137,7 @@ func (app *App) fetchAndStoreOracleData(ctx sdk.Context) error {
 		IsActive: true,
 	}
 
-	// Get corresponding currency pair for this market
+	//// Get corresponding currency pair for this market
 	cp := m.CurrencyPair
 	price, exists := oracleResp.Prices[cp.Base]
 
@@ -172,7 +172,6 @@ func (app *App) fetchAndStoreOracleData(ctx sdk.Context) error {
 	// Convert price to odds format for the prediction market
 	odds := convertPriceToOdds(price)
 
-	// Update Ethereum contract
 	tx, err := app.predictionMarket.UpdateOracleData(
 		auth,
 		big.NewInt(m.ID),
@@ -268,7 +267,7 @@ func (app *App) DeployContracts() error {
 	}
 
 	// 2. Deploy PredictionMarket with the BetToken address
-	predictionMarketAddress, predictionMarket, err := deployPredictionMarket(
+	predictionMarketAddress, predictionMarket, err := app.deployPredictionMarket(
 		ethClient,
 		auth,
 		betTokenAddress,
@@ -325,7 +324,7 @@ func deployBetToken(
 	return address, nil
 }
 
-func deployPredictionMarket(
+func (app *App) deployPredictionMarket(
 	client *ethclient.Client,
 	auth *bind.TransactOpts,
 	betTokenAddress common.Address,
@@ -353,6 +352,8 @@ func deployPredictionMarket(
 	if err != nil {
 		return common.Address{}, nil, err
 	}
+
+	app.Logger().Info("Setting oracle address for prediction market contract", "oracle", oracleAddress.String())
 
 	// Wait for oracle setup to complete
 	_, err = bind.WaitMined(context.Background(), client, tx)
@@ -455,7 +456,7 @@ func createEthereumAuth(client *ethclient.Client, privateKeyHex string) (*bind.T
 	auth.GasPrice = gasPrice
 
 	// Set gas limit
-	auth.GasLimit = uint64(500000)
+	auth.GasLimit = uint64(5000000)
 
 	return auth, nil
 }
