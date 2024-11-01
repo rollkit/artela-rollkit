@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "cosmossdk.io/api/cosmos/tx/config/v1" // import for side-effects
@@ -187,10 +188,11 @@ type App struct {
 	betTokenAddress         common.Address
 	predictionMarketAddress common.Address
 
-	predictionMarket *prediction.PredictionMarket
+	predictionMarket *prediction.ElectionPredictionMarket
 
-	ethClient      *ethclient.Client
-	contractConfig ContractConfig
+	ethClient         *ethclient.Client
+	contractConfig    ContractConfig
+	deploymentService *ContractDeploymentService
 
 	// simulation manager
 	sm *module.SimulationManager
@@ -409,14 +411,11 @@ func New(
 		}
 		app.contractConfig = contractConfig
 
-		//go func() {
-		time.Sleep(10 * time.Second)
 		// Deploy contracts
-		err := app.DeployContracts()
-		if err != nil {
-			app.Logger().Error("failed to deploy contracts", "err", err)
-		}
-		//}()
+		//err := app.DeployContracts()
+		//if err != nil {
+		//	app.Logger().Error("failed to deploy contracts", "err", err)
+		//}
 
 		return app.App.InitChainer(ctx, req)
 	}))
@@ -425,6 +424,14 @@ func New(
 	app.SetBeginBlocker(app.BeginBlocker)
 	app.setPostHandler()
 	app.SetEndBlocker(app.EndBlocker)
+
+	deploymentService := NewContractDeploymentService(app)
+	app.deploymentService = deploymentService
+
+	// Start the service along with other app services
+	if err := deploymentService.Start(); err != nil {
+		panic(err)
+	}
 
 	maxGasWanted := cast.ToUint64(appOpts.Get(srvflags.EVMMaxTxGasWanted))
 	app.setAnteHandler(app.txConfig, maxGasWanted)
@@ -458,6 +465,55 @@ func (app *App) BeginBlocker(ctx sdk.Context) (sdk.BeginBlock, error) {
 // EndBlocker application updates every end block
 func (app *App) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
 	return app.ModuleManager.EndBlock(ctx)
+}
+
+// Option 2: Using a separate service
+type ContractDeploymentService struct {
+	app        *App
+	deployOnce sync.Once
+}
+
+func NewContractDeploymentService(app *App) *ContractDeploymentService {
+	return &ContractDeploymentService{
+		app: app,
+	}
+}
+
+func (s *ContractDeploymentService) Start() error {
+	go func() {
+		// Wait for chain to start and Geth to be ready
+		time.Sleep(10 * time.Second)
+
+		s.deployOnce.Do(func() {
+			for i := 0; i < 30; i++ { // retry for 30 seconds
+				if s.app.IsEthereumReady() {
+					if err := s.app.DeployContracts(); err != nil {
+						s.app.Logger().Error("failed to deploy contracts", "err", err)
+					}
+					return
+				}
+				time.Sleep(time.Second)
+			}
+			s.app.Logger().Error("timed out waiting for Ethereum to be ready")
+		})
+	}()
+
+	return nil
+}
+
+// Helper method to check if Ethereum is ready
+func (app *App) IsEthereumReady() bool {
+	client, err := ethclient.Dial("http://localhost:8545")
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err = client.BlockNumber(ctx)
+	return err == nil
 }
 
 // LegacyAmino returns App's amino codec.

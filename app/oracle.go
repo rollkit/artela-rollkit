@@ -174,10 +174,7 @@ func (app *App) fetchAndStoreOracleData(ctx sdk.Context) error {
 	// Convert price to odds format for the prediction market
 	odds := convertPriceToOdds(price)
 
-	details, err := app.predictionMarket.GetMarketDetails(
-		nil, //auth,
-		big.NewInt(m.ID),
-	)
+	details, err := app.predictionMarket.GetMarketInfo(nil)
 	if err != nil {
 		app.Logger().Error(
 			"failed to get market details",
@@ -190,15 +187,12 @@ func (app *App) fetchAndStoreOracleData(ctx sdk.Context) error {
 	app.Logger().Info(
 		"market details",
 		"market_id", m.ID,
-		"description", details.Description,
-		"current odds", details.CurrentOdds,
+		"description", details.ElectionName,
 	)
 
-	tx, err := app.predictionMarket.UpdateOracleData(
+	tx, err := app.predictionMarket.UpdateOdds(
 		auth,
-		big.NewInt(m.ID),
 		odds,
-		big.NewInt(ctx.BlockHeader().Time.Unix()),
 	)
 	if err != nil {
 		app.Logger().Error(
@@ -276,14 +270,23 @@ func (app *App) DeployContracts() error {
 		return fmt.Errorf("failed to connect to ethereum: %w", err)
 	}
 
+	// Create auth for deployment
+	auth, err := createEthereumAuth(ethClient, config.DeployerPrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to create ethereum auth: %w", err)
+	}
+
 	// 1. Deploy BetToken
-	betTokenAddress, err := app.deployBetToken(ethClient, config)
+	betTokenAddress, err := app.deployBetToken(auth, ethClient, config)
 	if err != nil {
 		return fmt.Errorf("failed to deploy bet token: %w", err)
 	}
 
+	auth.Nonce.Add(auth.Nonce, big.NewInt(1))
+
 	// 2. Deploy PredictionMarket with the BetToken address
 	predictionMarketAddress, predictionMarket, err := app.deployPredictionMarket(
+		auth,
 		ethClient,
 		config,
 		betTokenAddress,
@@ -293,15 +296,18 @@ func (app *App) DeployContracts() error {
 		return fmt.Errorf("failed to deploy prediction market: %w", err)
 	}
 
+	auth.Nonce.Add(auth.Nonce, big.NewInt(1))
+
 	// 3. Approve PredictionMarket contract to spend tokens
-	if err := app.approvePredictionMarket(
-		ethClient,
-		config,
-		betTokenAddress,
-		predictionMarketAddress,
-	); err != nil {
-		return fmt.Errorf("failed to approve prediction market: %w", err)
-	}
+	//if err := app.approvePredictionMarket(
+	//	auth,
+	//	ethClient,
+	//	config,
+	//	betTokenAddress,
+	//	predictionMarketAddress,
+	//); err != nil {
+	//	return fmt.Errorf("failed to approve prediction market: %w", err)
+	//}
 
 	// Store addresses in app state or config
 	app.betTokenAddress = betTokenAddress
@@ -317,14 +323,10 @@ func (app *App) DeployContracts() error {
 }
 
 func (app *App) deployBetToken(
+	auth *bind.TransactOpts,
 	client *ethclient.Client,
 	config ContractConfig,
 ) (common.Address, error) {
-	// Create auth for deployment
-	auth, err := createEthereumAuth(client, config.DeployerPrivateKey)
-	if err != nil {
-		return common.Address{}, err
-	}
 	// Deploy BetToken contract
 	address, tx, _, err := prediction.DeployBetToken(
 		auth,
@@ -347,22 +349,19 @@ func (app *App) deployBetToken(
 }
 
 func (app *App) deployPredictionMarket(
+	auth *bind.TransactOpts,
 	client *ethclient.Client,
 	config ContractConfig,
 	betTokenAddress common.Address,
 	oracleAddress common.Address,
-) (common.Address, *prediction.PredictionMarket, error) {
-	// Create auth for deployment
-	auth, err := createEthereumAuth(client, config.DeployerPrivateKey)
-	if err != nil {
-		return common.Address{}, nil, fmt.Errorf("failed to create ethereum auth: %w", err)
-	}
+) (common.Address, *prediction.ElectionPredictionMarket, error) {
 	// Deploy PredictionMarket contract
-	address, tx, instance, err := prediction.DeployPredictionMarket(
+	address, tx, instance, err := prediction.DeployElectionPredictionMarket(
 		auth,
 		client,
 		betTokenAddress,
-		oracleAddress,
+		"2024 US Presidential Election",
+		big.NewInt(5000), // 50%
 	)
 	if err != nil {
 		return common.Address{}, nil, err
@@ -374,54 +373,13 @@ func (app *App) deployPredictionMarket(
 		return common.Address{}, nil, err
 	}
 
-	// Create auth for deployment
-	auth, err = createEthereumAuth(client, config.DeployerPrivateKey)
-	if err != nil {
-		return common.Address{}, nil, fmt.Errorf("failed to create ethereum auth: %w", err)
-	}
-
-	// Set oracle address
-	tx, err = instance.SetOracle(auth, oracleAddress)
-	if err != nil {
-		return common.Address{}, nil, err
-	}
-
-	app.Logger().Info("Setting oracle address for prediction market contract", "oracle", oracleAddress.String())
-	app.Logger().Info("Setting oracle address for prediction market contract", "tx", tx)
-
-	// Wait for oracle setup to complete
-	receipt, err := bind.WaitMined(context.Background(), client, tx)
-	if err != nil {
-		return common.Address{}, nil, err
-	}
-
-	app.Logger().Info("Set oracle address for prediction market contract", "receipt", receipt)
-
-	// Create auth for deployment
-	auth, err = createEthereumAuth(client, config.DeployerPrivateKey)
-	if err != nil {
-		return common.Address{}, nil, fmt.Errorf("failed to create ethereum auth: %w", err)
-	}
-
-	tx, err = instance.CreateMarket(auth, "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD")
-	if err != nil {
-		return common.Address{}, nil, err
-	}
-
-	app.Logger().Info("Creating market", "description", "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD", "tx", tx)
-
-	// Wait for market creation to complete
-	receipt, err = bind.WaitMined(context.Background(), client, tx)
-	if err != nil {
-		return common.Address{}, nil, err
-	}
-
-	app.Logger().Info("Created market", "description", "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD", "receipt", receipt, "logs", receipt.Logs)
+	app.Logger().Info("Deployed PredictionMarket contract", "address", address)
 
 	return address, instance, nil
 }
 
 func (app *App) approvePredictionMarket(
+	auth *bind.TransactOpts,
 	client *ethclient.Client,
 	config ContractConfig,
 	betTokenAddress common.Address,
@@ -431,11 +389,6 @@ func (app *App) approvePredictionMarket(
 	betToken, err := prediction.NewBetToken(betTokenAddress, client)
 	if err != nil {
 		return err
-	}
-
-	auth, err := createEthereumAuth(client, config.DeployerPrivateKey)
-	if err != nil {
-		return fmt.Errorf("failed to create ethereum auth: %w", err)
 	}
 
 	// Approve PredictionMarket to spend maximum amount
