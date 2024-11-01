@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"fmt"
+	"log"
 	"math/big"
 	"slices"
 	"strings"
@@ -137,7 +139,7 @@ func (app *App) fetchAndStoreOracleData(ctx sdk.Context) error {
 		IsActive: true,
 	}
 
-	//// Get corresponding currency pair for this market
+	// Get corresponding currency pair for this market
 	cp := m.CurrencyPair
 	price, exists := oracleResp.Prices[cp.Base]
 
@@ -171,6 +173,26 @@ func (app *App) fetchAndStoreOracleData(ctx sdk.Context) error {
 
 	// Convert price to odds format for the prediction market
 	odds := convertPriceToOdds(price)
+
+	details, err := app.predictionMarket.GetMarketDetails(
+		nil, //auth,
+		big.NewInt(m.ID),
+	)
+	if err != nil {
+		app.Logger().Error(
+			"failed to get market details",
+			"market_id", m.ID,
+			"err", err,
+		)
+		return err
+	}
+
+	app.Logger().Info(
+		"market details",
+		"market_id", m.ID,
+		"description", details.Description,
+		"current odds", details.CurrentOdds,
+	)
 
 	tx, err := app.predictionMarket.UpdateOracleData(
 		auth,
@@ -254,14 +276,8 @@ func (app *App) DeployContracts() error {
 		return fmt.Errorf("failed to connect to ethereum: %w", err)
 	}
 
-	// Create auth for deployment
-	auth, err := createEthereumAuth(ethClient, config.DeployerPrivateKey)
-	if err != nil {
-		return fmt.Errorf("failed to create ethereum auth: %w", err)
-	}
-
 	// 1. Deploy BetToken
-	betTokenAddress, err := deployBetToken(ethClient, auth, config)
+	betTokenAddress, err := app.deployBetToken(ethClient, config)
 	if err != nil {
 		return fmt.Errorf("failed to deploy bet token: %w", err)
 	}
@@ -269,7 +285,7 @@ func (app *App) DeployContracts() error {
 	// 2. Deploy PredictionMarket with the BetToken address
 	predictionMarketAddress, predictionMarket, err := app.deployPredictionMarket(
 		ethClient,
-		auth,
+		config,
 		betTokenAddress,
 		config.OracleAddress,
 	)
@@ -278,9 +294,9 @@ func (app *App) DeployContracts() error {
 	}
 
 	// 3. Approve PredictionMarket contract to spend tokens
-	if err := approvePredictionMarket(
+	if err := app.approvePredictionMarket(
 		ethClient,
-		auth,
+		config,
 		betTokenAddress,
 		predictionMarketAddress,
 	); err != nil {
@@ -300,11 +316,15 @@ func (app *App) DeployContracts() error {
 	return nil
 }
 
-func deployBetToken(
+func (app *App) deployBetToken(
 	client *ethclient.Client,
-	auth *bind.TransactOpts,
 	config ContractConfig,
 ) (common.Address, error) {
+	// Create auth for deployment
+	auth, err := createEthereumAuth(client, config.DeployerPrivateKey)
+	if err != nil {
+		return common.Address{}, err
+	}
 	// Deploy BetToken contract
 	address, tx, _, err := prediction.DeployBetToken(
 		auth,
@@ -326,10 +346,15 @@ func deployBetToken(
 
 func (app *App) deployPredictionMarket(
 	client *ethclient.Client,
-	auth *bind.TransactOpts,
+	config ContractConfig,
 	betTokenAddress common.Address,
 	oracleAddress common.Address,
 ) (common.Address, *prediction.PredictionMarket, error) {
+	// Create auth for deployment
+	auth, err := createEthereumAuth(client, config.DeployerPrivateKey)
+	if err != nil {
+		return common.Address{}, nil, fmt.Errorf("failed to create ethereum auth: %w", err)
+	}
 	// Deploy PredictionMarket contract
 	address, tx, instance, err := prediction.DeployPredictionMarket(
 		auth,
@@ -347,6 +372,12 @@ func (app *App) deployPredictionMarket(
 		return common.Address{}, nil, err
 	}
 
+	// Create auth for deployment
+	auth, err = createEthereumAuth(client, config.DeployerPrivateKey)
+	if err != nil {
+		return common.Address{}, nil, fmt.Errorf("failed to create ethereum auth: %w", err)
+	}
+
 	// Set oracle address
 	tx, err = instance.SetOracle(auth, oracleAddress)
 	if err != nil {
@@ -361,12 +392,31 @@ func (app *App) deployPredictionMarket(
 		return common.Address{}, nil, err
 	}
 
+	// Create auth for deployment
+	auth, err = createEthereumAuth(client, config.DeployerPrivateKey)
+	if err != nil {
+		return common.Address{}, nil, fmt.Errorf("failed to create ethereum auth: %w", err)
+	}
+
+	tx, err = instance.CreateMarket(auth, "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD")
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+
+	// Wait for market creation to complete
+	_, err = bind.WaitMined(context.Background(), client, tx)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+
+	app.Logger().Info("Created market", "description", "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD")
+
 	return address, instance, nil
 }
 
-func approvePredictionMarket(
+func (app *App) approvePredictionMarket(
 	client *ethclient.Client,
-	auth *bind.TransactOpts,
+	config ContractConfig,
 	betTokenAddress common.Address,
 	predictionMarketAddress common.Address,
 ) error {
@@ -374,6 +424,11 @@ func approvePredictionMarket(
 	betToken, err := prediction.NewBetToken(betTokenAddress, client)
 	if err != nil {
 		return err
+	}
+
+	auth, err := createEthereumAuth(client, config.DeployerPrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to create ethereum auth: %w", err)
 	}
 
 	// Approve PredictionMarket to spend maximum amount
@@ -446,7 +501,36 @@ func createEthereumAuth(client *ethclient.Client, privateKeyHex string) (*bind.T
 		return nil, err
 	}
 
-	//auth.Nonce = big.NewInt(int64(nonce))
+	// Get the sender's address
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("error casting public key to ECDSA")
+	}
+	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+
+	// Try both PendingNonceAt and NonceAt to ensure we get the correct nonce
+	pendingNonce, err := client.PendingNonceAt(context.Background(), fromAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	latestNonce, err := client.NonceAt(context.Background(), fromAddress, nil) // nil for latest block
+	if err != nil {
+		return nil, err
+	}
+
+	// Use the maximum of pending and latest nonce to be safe
+	nonce := pendingNonce
+	if latestNonce > pendingNonce {
+		nonce = latestNonce
+	}
+
+	// Log the nonces for debugging
+	log.Printf("Address: %s, Latest Nonce: %d, Pending Nonce: %d, Using Nonce: %d",
+		fromAddress.Hex(), latestNonce, pendingNonce, nonce)
+
+	auth.Nonce = big.NewInt(int64(nonce))
 
 	// Get gas price
 	gasPrice, err := client.SuggestGasPrice(context.Background())
