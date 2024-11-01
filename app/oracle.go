@@ -336,10 +336,12 @@ func (app *App) deployBetToken(
 	}
 
 	// Wait for deployment to complete
-	_, err = bind.WaitMined(context.Background(), client, tx)
+	receipt, err := bind.WaitMined(context.Background(), client, tx)
 	if err != nil {
 		return common.Address{}, err
 	}
+
+	app.Logger().Info("Deployed BetToken contract", "receipt", receipt)
 
 	return address, nil
 }
@@ -385,12 +387,15 @@ func (app *App) deployPredictionMarket(
 	}
 
 	app.Logger().Info("Setting oracle address for prediction market contract", "oracle", oracleAddress.String())
+	app.Logger().Info("Setting oracle address for prediction market contract", "tx", tx)
 
 	// Wait for oracle setup to complete
-	_, err = bind.WaitMined(context.Background(), client, tx)
+	receipt, err := bind.WaitMined(context.Background(), client, tx)
 	if err != nil {
 		return common.Address{}, nil, err
 	}
+
+	app.Logger().Info("Set oracle address for prediction market contract", "receipt", receipt)
 
 	// Create auth for deployment
 	auth, err = createEthereumAuth(client, config.DeployerPrivateKey)
@@ -403,13 +408,15 @@ func (app *App) deployPredictionMarket(
 		return common.Address{}, nil, err
 	}
 
+	app.Logger().Info("Creating market", "description", "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD", "tx", tx)
+
 	// Wait for market creation to complete
-	_, err = bind.WaitMined(context.Background(), client, tx)
+	receipt, err = bind.WaitMined(context.Background(), client, tx)
 	if err != nil {
 		return common.Address{}, nil, err
 	}
 
-	app.Logger().Info("Created market", "description", "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD")
+	app.Logger().Info("Created market", "description", "WILL_BERNIE_SANDERS_WIN_THE_2024_US_PRESIDENTIAL_ELECTION?YES/USD", "receipt", receipt, "logs", receipt.Logs)
 
 	return address, instance, nil
 }

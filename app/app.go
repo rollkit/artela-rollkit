@@ -409,14 +409,14 @@ func New(
 		}
 		app.contractConfig = contractConfig
 
-		go func() {
-			time.Sleep(10 * time.Second)
-			// Deploy contracts
-			err := app.DeployContracts()
-			if err != nil {
-				app.Logger().Error("failed to deploy contracts", "err", err)
-			}
-		}()
+		//go func() {
+		time.Sleep(10 * time.Second)
+		// Deploy contracts
+		err := app.DeployContracts()
+		if err != nil {
+			app.Logger().Error("failed to deploy contracts", "err", err)
+		}
+		//}()
 
 		return app.App.InitChainer(ctx, req)
 	}))
